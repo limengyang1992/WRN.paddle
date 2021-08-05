@@ -1,87 +1,91 @@
+
+import math
 import paddle
 import paddle.nn as nn
-import paddle.nn.functional  as F
-
-import numpy as np
+import paddle.fluid  as F
 
 
-def conv3x3(in_planes, out_planes, stride=1):
-    return nn.Conv2D(in_planes, out_planes, kernel_size=3, stride=stride, padding=1)
 
-def conv_init(m):
-    classname = m.__class__.__name__
-    if classname.find('Conv') != -1:
-        nn.initializer.XavierUniform(m.weight, gain=np.sqrt(2))
-        nn.initializer.constant(m.bias, 0)
-    elif classname.find('BatchNorm') != -1:
-        nn.initializer.constant(m.weight, 1)
-        nn.initializer.constant(m.bias, 0)
 
-class wide_basic(nn.Layer):
-    def __init__(self, in_planes, planes, dropout_rate, stride=1):
-        super(wide_basic, self).__init__()
-        self.bn1 = nn.BatchNorm2D(in_planes)
-        self.conv1 = nn.Conv2D(in_planes, planes, kernel_size=3, padding=1)
-        self.dropout = nn.Dropout(p=dropout_rate)
-        self.bn2 = nn.BatchNorm2D(planes)
-        self.conv2 = nn.Conv2D(planes, planes, kernel_size=3, stride=stride, padding=1)
-
-        self.shortcut = nn.Sequential()
-        if stride != 1 or in_planes != planes:
-            self.shortcut = nn.Sequential(
-                nn.Conv2D(in_planes, planes, kernel_size=1, stride=stride),
-            )
-
+class BasicBlock(nn.Layer):
+    def __init__(self, in_planes, out_planes, stride, dropRate=0.3):
+        super(BasicBlock, self).__init__()
+        self.bn1 = nn.BatchNorm2D (in_planes)
+        self.relu1 = nn.ReLU()
+        self.conv1 = nn.Conv2D(in_planes, out_planes, kernel_size=3, stride=stride,
+                               padding=1)
+        self.bn2 = nn.BatchNorm2D(out_planes)
+        self.relu2 = nn.ReLU()
+        self.conv2 = nn.Conv2D(out_planes, out_planes, kernel_size=3, stride=1,
+                               padding=1 )
+        self.droprate = dropRate
+        self.equalInOut = (in_planes == out_planes)
+        self.convShortcut = (not self.equalInOut) and nn.Conv2D(in_planes, out_planes, kernel_size=1, stride=stride,
+                               padding=0) or None
     def forward(self, x):
-        out = self.dropout(self.conv1(F.relu(self.bn1(x))))
-        out = self.conv2(F.relu(self.bn2(out)))
-        out += self.shortcut(x)
+        if not self.equalInOut:
+            x = self.relu1(self.bn1(x))
+        else:
+            out = self.relu1(self.bn1(x))
+        out = self.relu2(self.bn2(self.conv1(out if self.equalInOut else x)))
+        if self.droprate > 0:
+            out = F.layers.dropout(out, dropout_prob=self.droprate)
+        out = self.conv2(out)
+        return paddle.add(x if self.equalInOut else self.convShortcut(x), out)
 
-        return out
-
-class Wide_ResNet(nn.Layer):
-    def __init__(self, depth, widen_factor, dropout_rate, num_classes):
-        super(Wide_ResNet, self).__init__()
-        self.in_planes = 16
-
-        assert ((depth-4)%6 ==0), 'Wide-resnet depth should be 6n+4'
-        n = (depth-4)/6
-        k = widen_factor
-
-        print('| Wide-Resnet %dx%d' %(depth, k))
-        nStages = [16, 16*k, 32*k, 64*k]
-
-        self.conv1 = conv3x3(3,nStages[0])
-        self.layer1 = self._wide_layer(wide_basic, nStages[1], n, dropout_rate, stride=1)
-        self.layer2 = self._wide_layer(wide_basic, nStages[2], n, dropout_rate, stride=2)
-        self.layer3 = self._wide_layer(wide_basic, nStages[3], n, dropout_rate, stride=2)
-        self.bn1 = nn.BatchNorm2D(nStages[3], momentum=0.9)
-        self.linear = nn.Linear(nStages[3], num_classes)
-
-    def _wide_layer(self, block, planes, num_blocks, dropout_rate, stride):
-        strides = [stride] + [1]*(int(num_blocks)-1)
+class NetworkBlock(nn.Layer):
+    def __init__(self, nb_layers, in_planes, out_planes, block, stride, dropRate=0.3):
+        super(NetworkBlock, self).__init__()
+        self.layer = self._make_layer(block, in_planes, out_planes, nb_layers, stride, dropRate)
+    def _make_layer(self, block, in_planes, out_planes, nb_layers, stride, dropRate):
         layers = []
-
-        for stride in strides:
-            layers.append(block(self.in_planes, planes, dropout_rate, stride))
-            self.in_planes = planes
-
+        for i in range(int(nb_layers)):
+            layers.append(block(i == 0 and in_planes or out_planes, out_planes, i == 0 and stride or 1, dropRate))
         return nn.Sequential(*layers)
+    def forward(self, x):
+        return self.layer(x)
+
+class WideResNet(nn.Layer):
+    def __init__(self, depth, widen_factor=1, dropout_rate=0.3,num_classes=10):
+        super(WideResNet, self).__init__()
+        nChannels = [16, 16*widen_factor, 32*widen_factor, 64*widen_factor]
+        assert((depth - 4) % 6 == 0)
+        n = (depth - 4) / 6
+        block = BasicBlock
+        # 1st conv before any network block
+        self.conv1 = nn.Conv2D(3, nChannels[0], kernel_size=3, stride=1,
+                               padding=1)
+        # 1st block
+        self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropout_rate)
+        # 2nd block
+        self.block2 = NetworkBlock(n, nChannels[1], nChannels[2], block, 2, dropout_rate)
+        # 3rd block
+        self.block3 = NetworkBlock(n, nChannels[2], nChannels[3], block, 2, dropout_rate)
+        # global average pooling and classifier
+        self.bn1 = nn.BatchNorm2D(nChannels[3])
+        self.relu = nn.ReLU()
+        # self.fc = nn.Linear(nChannels[3], num_classes)
+        self.nChannels = nChannels[3]
+
+        self.feature_num = nChannels[3]
+        self.fc = nn.Linear(self.feature_num, num_classes)
 
     def forward(self, x):
         out = self.conv1(x)
-        out = self.layer1(out)
-        out = self.layer2(out)
-        out = self.layer3(out)
-        out = F.relu(self.bn1(out))
-        out = F.avg_pool2d(out, 8)
+        out = self.block1(out)
+        out = self.block2(out)
+        out = self.block3(out)
+        out = self.relu(self.bn1(out))
+        out = paddle.nn.functional.avg_pool2d(out, 8)
+        # out = out.view(-1, self.nChannels)
         out = paddle.flatten(out, 1)
-        out = self.linear(out)
+        out = self.fc(out)
+        return out #, self.fc(out)
 
-        return out
 
 if __name__ == '__main__':
-    net = Wide_ResNet(depth=28, widen_factor=20, dropout_rate=0.3,num_classes=10)
+    net = WideResNet(depth=28, widen_factor=20, dropout_rate=0.3,num_classes=10)
     # print(net)
     FLOPs = paddle.flops(net, [1, 3, 32, 32], print_detail=False)
     print(FLOPs)
+
