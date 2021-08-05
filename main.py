@@ -144,7 +144,7 @@ if __name__ == '__main__':
     val_loader = paddle.io.DataLoader(test_set,batch_size=cfg.batchsize)
 
     #定义模型
-    net = wide_resnet.Wide_ResNet(depth=cfg.depth, widen_factor=cfg.widen_factor, dropout_rate=cfg.dropout,num_classes=10)
+    net = wide_resnet.WideResNet(depth=cfg.depth, widen_factor=cfg.widen_factor, dropout_rate=cfg.dropout,num_classes=10)
     criterion = CrossEntropyLoss()
 
     # 训练
