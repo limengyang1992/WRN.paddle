@@ -1,16 +1,15 @@
-
 import paddle
 from paddle.metric import Accuracy
 from paddle.nn import CrossEntropyLoss
 from paddle.vision.datasets import Cifar10
-from paddle.vision.transforms import RandomHorizontalFlip, Compose, RandomCrop, Normalize
+from paddle.vision.transforms import RandomHorizontalFlip, RandomResizedCrop, Compose, BrightnessTransform, ContrastTransform, RandomCrop, Normalize, RandomRotation
 
 import math
 import time
 import logging
 import argparse
 import numpy as np
-import wide_resnet
+from model import WideResNet
 
 logger = logging.getLogger(__name__)
 logger.setLevel(level=logging.INFO)
@@ -71,7 +70,10 @@ def build_transform():
     CIFAR_STD = [0.2023, 0.1994, 0.2010]  
     train_transforms = Compose([
         RandomCrop(32, padding=4),
+        ContrastTransform(0.1),
+        BrightnessTransform(0.1),
         RandomHorizontalFlip(),
+        RandomRotation(15),
         ToArray(),
         Normalize(CIFAR_MEAN, CIFAR_STD),
     ])
@@ -144,7 +146,7 @@ if __name__ == '__main__':
     val_loader = paddle.io.DataLoader(test_set,batch_size=cfg.batchsize)
 
     #定义模型
-    net = wide_resnet.WideResNet(depth=cfg.depth, widen_factor=cfg.widen_factor, dropout_rate=cfg.dropout,num_classes=10)
+    net = WideResNet(depth=cfg.depth, widen_factor=cfg.widen_factor, dropout_rate=cfg.dropout,num_classes=10)
     criterion = CrossEntropyLoss()
 
     # 训练
@@ -152,7 +154,7 @@ if __name__ == '__main__':
     use_gpu = True
     paddle.set_device('gpu:0') if use_gpu else paddle.set_device('cpu')
 
-    for epoch in range(cfg.epoch):
+    for epoch in range(2):
         start_time = time.time()
 
         train_loss, train_acc  = train(epoch,net,train_loader,criterion,cfg)
@@ -160,5 +162,6 @@ if __name__ == '__main__':
 
         if best_acc < valid_acc:
             best_acc = valid_acc
+            paddle.save(net.state_dict(), './checkpoint/best.pdparams')
 
         logger.info(f'Epoch: {epoch:02}, Best Acc: {best_acc * 100:.2f}%')
