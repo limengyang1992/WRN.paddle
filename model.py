@@ -1,10 +1,7 @@
-
 import math
 import paddle
 import paddle.nn as nn
 import paddle.fluid  as F
-
-
 
 
 class BasicBlock(nn.Layer):
@@ -13,15 +10,15 @@ class BasicBlock(nn.Layer):
         self.bn1 = nn.BatchNorm2D (in_planes)
         self.relu1 = nn.ReLU()
         self.conv1 = nn.Conv2D(in_planes, out_planes, kernel_size=3, stride=stride,
-                               padding=1)
+                               padding=1,bias_attr=False)
         self.bn2 = nn.BatchNorm2D(out_planes)
         self.relu2 = nn.ReLU()
         self.conv2 = nn.Conv2D(out_planes, out_planes, kernel_size=3, stride=1,
-                               padding=1 )
+                               padding=1,bias_attr=False)
         self.droprate = dropRate
         self.equalInOut = (in_planes == out_planes)
         self.convShortcut = (not self.equalInOut) and nn.Conv2D(in_planes, out_planes, kernel_size=1, stride=stride,
-                               padding=0) or None
+                               padding=0,bias_attr=False) or None
     def forward(self, x):
         if not self.equalInOut:
             x = self.relu1(self.bn1(x))
@@ -54,7 +51,7 @@ class WideResNet(nn.Layer):
         block = BasicBlock
         # 1st conv before any network block
         self.conv1 = nn.Conv2D(3, nChannels[0], kernel_size=3, stride=1,
-                               padding=1)
+                               padding=1,bias_attr=False)
         # 1st block
         self.block1 = NetworkBlock(n, nChannels[0], nChannels[1], block, 1, dropout_rate)
         # 2nd block
@@ -81,11 +78,3 @@ class WideResNet(nn.Layer):
         out = paddle.flatten(out, 1)
         out = self.fc(out)
         return out #, self.fc(out)
-
-
-if __name__ == '__main__':
-    net = WideResNet(depth=28, widen_factor=20, dropout_rate=0.3,num_classes=10)
-    # print(net)
-    FLOPs = paddle.flops(net, [1, 3, 32, 32], print_detail=False)
-    print(FLOPs)
-
